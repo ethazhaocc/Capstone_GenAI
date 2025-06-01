@@ -2,9 +2,207 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Hello World!</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Python Chatbot</title>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        
+        #chatbox {
+            width: 100%;
+            height: 400px;
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            padding: 15px;
+            overflow-y: scroll;
+            background-color: #f9f9f9;
+            margin-bottom: 15px;
+        }
+        
+        .message {
+            margin: 10px 0;
+            padding: 8px 12px;
+            border-radius: 15px;
+            max-width: 80%;
+        }
+        
+        .user-message {
+            background-color: #007bff;
+            color: white;
+            margin-left: auto;
+            text-align: right;
+        }
+        
+        .bot-message {
+            background-color: #e9ecef;
+            color: #333;
+        }
+        
+        .input-container {
+            display: flex;
+            gap: 10px;
+        }
+        
+        #message-input {
+            flex: 1;
+            padding: 12px;
+            border: 2px solid #ddd;
+            border-radius: 25px;
+            outline: none;
+        }
+        
+        #send-button {
+            padding: 12px 25px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+        }
+        
+        #send-button:hover {
+            background-color: #0056b3;
+        }
+        
+        #send-button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .loading {
+            color: #666;
+            font-style: italic;
+        }
+    </style>
 </head>
 <body>
-    <h1>Hello World!</h1>
+    <h1>🐍 Python Chatbot</h1>
+    <div id="chatbox">
+        <div class="loading">Loading Python environment...</div>
+    </div>
+    
+    <div class="input-container">
+        <input type="text" id="message-input" placeholder="Type your message..." disabled>
+        <button id="send-button" disabled>Send</button>
+    </div>
+
+    <script>
+        let pyodide;
+        let isReady = false;
+        
+        async function initializePyodide() {
+            try {
+                pyodide = await loadPyodide();
+                
+                // Define Python chatbot logic
+                pyodide.runPython(`
+                    import random
+                    import re
+                    
+                    class SimpleChatbot:
+                        def __init__(self):
+                            self.responses = {
+                                'hello': ['Hello! How can I help you?', 'Hi there!', 'Greetings!'],
+                                'how are you': ['I am doing well, thank you!', 'Great! How about you?'],
+                                'bye': ['Goodbye!', 'See you later!', 'Take care!'],
+                                'python': ['Python is awesome!', 'I love Python programming!'],
+                                'name': ['I am a simple Python chatbot!', 'You can call me PyBot!'],
+                                'math': ['I can do basic math! Try asking me to calculate something.'],
+                                'default': ['That is interesting!', 'Tell me more!', 'I see!', 'Hmm, let me think about that.']
+                            }
+                        
+                        def calculate(self, expression):
+                            try:
+                                # Simple calculator - only allow basic operations
+                                allowed_chars = set('0123456789+-*/.()')
+                                if all(c in allowed_chars or c.isspace() for c in expression):
+                                    result = eval(expression)
+                                    return f"The answer is: {result}"
+                                else:
+                                    return "I can only calculate basic math expressions."
+                            except:
+                                return "Sorry, I couldn't calculate that."
+                        
+                        def respond(self, message):
+                            message = message.lower().strip()
+                            
+                            # Check for math expressions
+                            if any(op in message for op in ['+', '-', '*', '/', 'calculate']):
+                                # Extract numbers and operators
+                                math_expr = re.search(r'[0-9+\-*/().\s]+', message)
+                                if math_expr:
+                                    return self.calculate(math_expr.group())
+                            
+                            # Simple keyword matching
+                            for keyword, responses in self.responses.items():
+                                if keyword in message:
+                                    return random.choice(responses)
+                            
+                            # Default response
+                            return random.choice(self.responses['default'])
+                    
+                    # Create chatbot instance
+                    bot = SimpleChatbot()
+                `);
+                
+                isReady = true;
+                document.getElementById('chatbox').innerHTML = 
+                    '<div class="bot-message message">Hello! I\'m a Python chatbot. Try saying hello, asking me to calculate something, or just chat!</div>';
+                document.getElementById('message-input').disabled = false;
+                document.getElementById('send-button').disabled = false;
+                document.getElementById('message-input').focus();
+                
+            } catch (error) {
+                document.getElementById('chatbox').innerHTML = 
+                    '<div class="bot-message message">Sorry, failed to load Python environment.</div>';
+            }
+        }
+        
+        function addMessage(message, isUser) {
+            const chatbox = document.getElementById('chatbox');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${isUser ? 'user-message' : 'bot-message'}`;
+            messageDiv.textContent = message;
+            chatbox.appendChild(messageDiv);
+            chatbox.scrollTop = chatbox.scrollHeight;
+        }
+        
+        function sendMessage() {
+            if (!isReady) return;
+            
+            const messageInput = document.getElementById('message-input');
+            const message = messageInput.value.trim();
+            
+            if (!message) return;
+            
+            // Add user message
+            addMessage(message, true);
+            messageInput.value = '';
+            
+            // Get bot response using Python
+            try {
+                const response = pyodide.runPython(`bot.respond("${message.replace(/"/g, '\\"')}")`);
+                addMessage(response, false);
+            } catch (error) {
+                addMessage('Sorry, I encountered an error processing your message.', false);
+            }
+        }
+        
+        // Event listeners
+        document.getElementById('send-button').addEventListener('click', sendMessage);
+        document.getElementById('message-input').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+        
+        // Initialize when page loads
+        initializePyodide();
+    </script>
 </body>
 </html>
