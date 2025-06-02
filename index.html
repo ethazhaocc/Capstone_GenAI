@@ -92,117 +92,391 @@
     </div>
 
     <script>
-        let pyodide;
-        let isReady = false;
-        
-        async function initializePyodide() {
-            try {
-                pyodide = await loadPyodide();
-                
-                // Define Python chatbot logic
-                pyodide.runPython(`
-                    import random
-                    import re
-                    
-                    class SimpleChatbot:
-                        def __init__(self):
-                            self.responses = {
-                                'hello': ['Hello! How can I help you?', 'Hi there!', 'Greetings!'],
-                                'how are you': ['I am doing well, thank you!', 'Great! How about you?'],
-                                'bye': ['Goodbye!', 'See you later!', 'Take care!'],
-                                'python': ['Python is awesome!', 'I love Python programming!'],
-                                'name': ['I am a simple Python chatbot!', 'You can call me PyBot!'],
-                                'math': ['I can do basic math! Try asking me to calculate something.'],
-                                'default': ['That is interesting!', 'Tell me more!', 'I see!', 'Hmm, let me think about that.']
-                            }
-                        
-                        def calculate(self, expression):
-                            try:
-                                # Simple calculator - only allow basic operations
-                                allowed_chars = set('0123456789+-*/.()')
-                                if all(c in allowed_chars or c.isspace() for c in expression):
-                                    result = eval(expression)
-                                    return f"The answer is: {result}"
-                                else:
-                                    return "I can only calculate basic math expressions."
-                            except:
-                                return "Sorry, I couldn't calculate that."
-                        
-                        def respond(self, message):
-                            message = message.lower().strip()
-                            
-                            # Check for math expressions
-                            if any(op in message for op in ['+', '-', '*', '/', 'calculate']):
-                                # Extract numbers and operators
-                                math_expr = re.search(r'[0-9+\-*/().\s]+', message)
-                                if math_expr:
-                                    return self.calculate(math_expr.group())
-                            
-                            # Simple keyword matching
-                            for keyword, responses in self.responses.items():
-                                if keyword in message:
-                                    return random.choice(responses)
-                            
-                            # Default response
-                            return random.choice(self.responses['default'])
-                    
-                    # Create chatbot instance
-                    bot = SimpleChatbot()
-                `);
-                
-                isReady = true;
-                document.getElementById('chatbox').innerHTML = 
-                    '<div class="bot-message message">Hello! I\'m a Python chatbot. Try saying hello, asking me to calculate something, or just chat!</div>';
-                document.getElementById('message-input').disabled = false;
-                document.getElementById('send-button').disabled = false;
-                document.getElementById('message-input').focus();
-                
-            } catch (error) {
-                document.getElementById('chatbox').innerHTML = 
-                    '<div class="bot-message message">Sorry, failed to load Python environment.</div>';
-            }
-        }
-        
-        function addMessage(message, isUser) {
-            const chatbox = document.getElementById('chatbox');
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `message ${isUser ? 'user-message' : 'bot-message'}`;
-            messageDiv.textContent = message;
-            chatbox.appendChild(messageDiv);
-            chatbox.scrollTop = chatbox.scrollHeight;
-        }
-        
-        function sendMessage() {
-            if (!isReady) return;
-            
-            const messageInput = document.getElementById('message-input');
-            const message = messageInput.value.trim();
-            
-            if (!message) return;
-            
-            // Add user message
-            addMessage(message, true);
-            messageInput.value = '';
-            
-            // Get bot response using Python
-            try {
-                const response = pyodide.runPython(`bot.respond("${message.replace(/"/g, '\\"')}")`);
-                addMessage(response, false);
-            } catch (error) {
-                addMessage('Sorry, I encountered an error processing your message.', false);
-            }
-        }
-        
-        // Event listeners
-        document.getElementById('send-button').addEventListener('click', sendMessage);
-        document.getElementById('message-input').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                sendMessage();
-            }
-        });
-        
-        // Initialize when page loads
-        initializePyodide();
+# A framework that connects LLMs to actual code/chatbot
+# import langchain  # Removed: unused
+
+#imports tavily, which is a strong search engine used in retrieval-augmented generation (RAG) systems.
+from tavily import TavilyClient
+
+from langchain_community.tools.tavily_search import TavilySearchResults
+
+# Able to access different AI-powered features that can greatly help with the retrieval process
+# import openai  # Removed: unused
+
+# Imports datasets from Hugging Face, which provides a complex NLP and ML system
+import datasets
+
+#imports time which allows the code to wait for a certain amount of time
+import time
+
+# Imports a vector database called Pinecone.
+# A vector database stores data for vector embeddings—numerical representations of things.
+# They are commonly used in neural networks and allow algorithms to understand relationships between different pieces of information.
+import pinecone
+
+# This is a tokenizer that changes text into tokens that NLPs or LLMs can use to figure out meaning
+import tiktoken
+
+# Allows the code to operate and interact with the operating system
+import os 
+
+from pinecone import Pinecone, ServerlessSpec
+
+# Loads environment variables from a .env file
+from dotenv import load_dotenv
+load_dotenv()
+
+from langchain_community.chat_models import ChatOpenAI
+
+# Token-aware trimmer function
+def trim_messages_to_token_limit(messages, max_tokens=12000, model="gpt-4o"):
+    import tiktoken
+    from copy import deepcopy
+
+    try:
+        enc = tiktoken.encoding_for_model(model)
+    except KeyError:
+    # Use cl100k_base for GPT-4o and other OpenAI models as fallback
+        enc = tiktoken.get_encoding("cl100k_base")
+    total = 0
+    trimmed = []
+
+    for msg in reversed(messages):
+        content_tokens = enc.encode(msg.content)
+        token_count = len(content_tokens)
+        #If the 
+        if total + token_count > max_tokens:
+            remaining_tokens = max_tokens - total
+            if remaining_tokens > 0:
+                truncated_content = enc.decode(content_tokens[-remaining_tokens:])
+                copy_msg = deepcopy(msg)
+                copy_msg.content = truncated_content
+                trimmed.insert(0, copy_msg)
+                total += remaining_tokens
+            break
+        else:
+            trimmed.insert(0, msg)
+            total += token_count
+
+    return trimmed
+
+# Load environment variables from the .env file
+
+# Get API key from environment variables
+api_key = os.getenv("OPENAI_API_KEY")
+
+# Raise error if the API key is missing
+if api_key is None:
+    raise ValueError("❌ OPENAI_API_KEY not found in environment variables. Please set it in your .env file.")
+
+# Initialize the chat model with the API key and specify the model to use
+chat = ChatOpenAI(
+    openai_api_key=api_key,
+    model_name='gpt-4o'
+)
+assert chat.model_name == "gpt-4o", f"Model is actually: {chat.model_name}"
+print("🔍 Confirmed: Using model =", chat.model_name)
+
+#imports structured message classes used to define a chat history
+from langchain_core.messages import(
+    #the SystemMessage class sets the behavior/role for the AI
+    SystemMessage,
+    #the HumanMessage class are the human questions/queries the AI has to respond to
+    HumanMessage,
+    #the AIMessage class is the AI that responds to the prompts or questions
+    AIMessage,
+)
+
+#conversation between the System, human, and AI
+messages = [
+    SystemMessage(content = "You are a helpful assistant."),
+    HumanMessage(content = "Hi AI, how are you today?"),
+    AIMessage(content = "I'm great thank you. How can I help you today?"),
+    HumanMessage(content = "I would like to understand string theory")
+]
+
+#imports the messages into res and gives the chat history to OpenAI
+res = chat.invoke(trim_messages_to_token_limit(messages))
+#basically asks OpenAI, what would you do given this conversation starter
+res
+
+#prints the AI's response to the starter
+print(res.content)
+
+#appends the message to the list of the messages, essentially adding to the user conversation
+messages.append(res)
+
+#created another prompt for the AI to answer
+prompt = HumanMessage(
+    content = "Why do physicists believe that it can create a 'unified thereory'?"
+)
+
+#added the prompt to the messages histor
+messages.append(prompt)
+
+#activates the AI so that it can answer the prompt
+res = chat.invoke(trim_messages_to_token_limit(messages))
+
+#prints the AI's answer
+print(res.content)
+
+#Hardcoded context that the AI is used to be trained in the topic 
+llmchain_information = [
+    "LLMChain is a core abstraction in LangChain that combines a prompt template with a language model.",
+    "It allows developers to create chainable components that can be integrated into larger LLM pipelines.",
+    "Each LLMChain typically has a prompt, a model (like ChatOpenAI), and optional memory or output parsers."
+]
+
+#defining a variable
+source_knowledge = "\n".join(llmchain_information)
+
+#query
+query = "Can you tell me about the LLMChain in LangChain?"
+
+#tells the AI what to do with the query and imports the source knowledge so that the AI knows how to answer the query
+augmented_prompt = f"""Using the context below, answer the query.
+
+Context:
+    {source_knowledge}
+
+Query: {query}"""
+
+#prints the prompt
+print(augmented_prompt)
+
+#Labels the question to the HumanMessage to the augmented prompt contents
+prompt = HumanMessage(
+    content = augmented_prompt
+)
+
+#adds the prompt to the chat history
+messages.append(prompt)
+
+#send the chat to the AI
+res = chat.invoke(trim_messages_to_token_limit(messages))
+
+#prints the AI response
+print(res.content)
+
+#loads data from Hugging Face which is a Transformer
+from datasets import load_dataset
+
+#loads papers from the data set that contain knowledge from an article
+dataset = load_dataset(
+    "jamescalam/llama-2-arxiv-papers-chunked",
+    #loads the training part of this article
+    split = "train"
+)
+# Initialize Pinecone with API key and environment with us-west1-gcp as a fallback if PINECONE_ENVIRONMENT is not seet
+pinecone_api_key = os.getenv("PINECONE_API_KEY")
+if pinecone_api_key is None:
+    raise ValueError("❌ PINECONE_API_KEY not found in environment variables.")
+pc = Pinecone(api_key=pinecone_api_key)
+
+#names the index for the vector database
+index_name = "llama-2-rag"
+if index_name not in pc.list_indexes().names():
+    pc.create_index(
+        name=index_name,
+        dimension=1536,  
+        metric="cosine",
+        spec=ServerlessSpec(
+            cloud="aws",                
+            region="us-east-1"          
+        )
+    )
+
+# Wait until index is ready
+while not pc.describe_index(index_name).status['ready']:
+    time.sleep(1)
+
+# Connect to the index
+index = pc.Index(index_name)
+
+#checks the conditions of the index
+print(index.describe_index_stats())
+
+# imports the OpenAIEmbeddings class from langchain
+from langchain_openai import OpenAIEmbeddings
+
+# converts the text into the 1536 dimensions that the vector database uses
+embed_model = OpenAIEmbeddings(
+    model="text-embedding-ada-002",
+    api_key=os.getenv("OPENAI_API_KEY")
+)
+
+# text to be embedded by the OpenAIEmbeddings model
+texts = [
+    'this is the first chunk of text',
+    'then another second chunk of text is here'
+]
+
+# returns 2 embeddings of 1536 dimensions each
+res = embed_model.embed_documents(texts)
+print(len(res), len(res[0]))  # 2 embeddings of 1536 dimensions each
+
+# imports visual progress bar
+from tqdm.auto import tqdm
+
+# converts Hugging Face dataset into a panda Datafram (makes it easier for row-based access)
+data = dataset.to_pandas()
+
+# the batch_size is the amount of data that the AI takes in each time
+batch_size = 100
+
+# loops through dataset and shows the progress using tqdm
+for i in tqdm(range(0, len(data), batch_size)):
+    # stops the training at the end of the batch of stop at the end of the dataset
+    i_end = min(len(data), i + batch_size)
+    batch = data.iloc[i : i_end]
+    # creates ids for the vectors using the document's DOI and chunk ID
+    ids = [f"{x['doi']} - {x['chunk-id']}" for i, x in batch.iterrows()]
+    # takes out the text chunks so that they can be embedded
+    text = [x['chunk'] for _, x in batch.iterrows()]
+    embeds = embed_model.embed_documents(text)
+    # creates medtadata dictionaries for the documents
+
+    metadata = [
+        {'text': x['chunk'],
+         'source': x['source'],
+         'title': x['title']} for i, x in batch.iterrows()
+    ]
+
+    # uploads the vectors, ids, and medata into the Pinecone index (creates the KB)
+    index.upsert(vectors = zip(ids, embeds, metadata))
+
+#checks the index stats and conditions
+index.describe_index_stats()
+{'dimension': 1536,
+ 'index_fullness': 0.0,
+ 'namespace': {'': {'vector_count': 4838}},
+ 'total_vector_count':4838
+ }
+
+#imports the PineconeVectorStore class from langchain_pinecone
+from langchain_pinecone import PineconeVectorStore
+
+text_field = "text"
+
+#connects LanChain to the Pinecone index
+vectorstore = PineconeVectorStore.from_existing_index(
+    index_name=index_name,
+    embedding=embed_model,
+    namespace="",  
+)
+
+query = "What is so special about Llama 2?"
+
+vectorstore.similarity_search(query, k = 3)
+
+#searches the vector database for the query and returns the top 3 most similar documents
+def augment_prompt(query: str):
+    results = vectorstore.similarity_search(query, k=3)
+    #if no reults are found, it returns None to trigger Tavily fallback
+    if not results:
+        return None 
+    source_knowledge = "\n".join([x.page_content for x in results])
+    return f"""Using the context below, answer the query:
+
+Context:
+{source_knowledge}
+
+Query: {query}"""
+
+#copy of the original query code
+print(augment_prompt(query))
+
+prompt = HumanMessage(
+    content = augment_prompt(query)
+)
+messages.append(prompt)
+
+res = chat.invoke(trim_messages_to_token_limit(messages))
+
+print(res.content)
+
+prompt = HumanMessage(
+    content = augment_prompt("what saftey measures were used in the development of llama 2?"
+    )
+)
+
+res = chat.invoke(trim_messages_to_token_limit(messages + [prompt]))
+print(res.content)
+
+API_KEY = os.getenv("TAVILY_API_KEY")
+
+# Raise error if the API key is missing
+if API_KEY is None:
+    raise ValueError("❌ TAVILY_API_KEY not found in environment variables. Please set it in your .env file.")
+
+# Define the improved augment_prompt function
+def augment_prompt(query: str):
+    results = vectorstore.similarity_search(query, k=3)
+    if not results:
+        return None  # Triggers Tavily fallback
+    source_knowledge = "\n".join([x.page_content for x in results])
+    return f"""Using the context below, answer the query:
+
+Context:
+{source_knowledge}
+
+Query: {query}"""
+
+# Visual initialization of the chatbot
+print("\n✅ The RAG chatbot is ready! Type your question below.")
+print("💡 Type 'exit' to quit.")
+
+# Assigns the search results to a variable
+search = TavilySearchResults()
+
+while True:
+    # The place where the user can input their query
+    user_input = input("\nYou: ").strip()
+    # Check if the user wants to exit or quit 
+    if user_input.lower() in {"exit", "quit"}:
+        # If the user wants to exit, then the program will stop
+        print("👋 Goodbye!")
+        break
+
+    try:
+        # Try creating a new prompt using the RAG pipeline
+        prompt_text = augment_prompt(user_input)
+
+        if prompt_text:
+            prompt = HumanMessage(content=prompt_text)
+            messages.append(prompt)
+
+            # Get the assistant's response
+            res = chat.invoke(trim_messages_to_token_limit(messages))
+            rag_response = res.content.strip()
+        else:
+            # No internal context found
+            rag_response = ""
+
+        uncertain_phrases = ["i'm not sure", "i don't know", "not enough information", "no relevant context"]
+
+        # Checks if the response is too short (less than 40 characters) or contains specific uncertainty phrases
+        if len(rag_response) < 40 or any(phrase in rag_response.lower() for phrase in uncertain_phrases):
+            # Falls back to the Tavily web search if RAG response is not sufficient
+            print("Not enough info from the internal knowledge. Searching the web with Tavily...")
+            # Runs the user's input through the Tavily search engine
+            web_results = search.run(user_input)
+            # Prints out the web search results
+            print("\n🌐 Web Search Results:\n", web_results)
+
+            # Asks the model to summarize or explain those results in better detail
+            followup_prompt = HumanMessage(content=f"Summarize this info for the user:\n\n{web_results}")
+            res = chat.invoke(trim_messages_to_token_limit(messages + [followup_prompt]))
+            print("\nAssistant:", res.content)
+            messages.append(res)
+
+        else:
+            # Prints the RAG response if it is sufficient
+            print("\nAssistant:", rag_response)
+            messages.append(res)
+
+    except Exception as e:
+        print("⚠️ An error occurred:", str(e))
     </script>
 </body>
 </html>
